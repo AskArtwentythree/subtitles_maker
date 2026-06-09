@@ -140,6 +140,47 @@ def _suffix(file_name: str) -> str:
     return ext if ext in ALLOWED_EXTS else ".mp4"
 
 
+async def _send_video(update: Update, out_path: str, caption: str, remote_url: Optional[str]) -> bool:
+    """Отправить видео максимально надёжно.
+
+    1) Сначала отдаём Telegram прямую ссылку на результат (fal.media) — Telegram сам
+       скачивает файл со своей быстрой сети, ничего не выгружая с нашего сервера.
+       Это спасает от WriteTimeout на слабом исходящем канале (Railway и т.п.).
+    2) Если по ссылке не вышло (напр. файл > 20 МБ — лимит отправки по URL) —
+       заливаем локальный файл multipart с большими таймаутами (до 50 МБ).
+    """
+    if remote_url:
+        try:
+            await update.message.reply_video(
+                video=remote_url,
+                caption=caption,
+                supports_streaming=True,
+                read_timeout=180,
+                connect_timeout=60,
+                write_timeout=60,
+                pool_timeout=60,
+            )
+            return True
+        except Exception as e:
+            logger.warning("Отправка по URL не удалась (%s) — пробую загрузить файл", e)
+
+    try:
+        with open(out_path, "rb") as f:
+            await update.message.reply_video(
+                video=f,
+                caption=caption,
+                supports_streaming=True,
+                read_timeout=180,
+                connect_timeout=60,
+                write_timeout=600,
+                pool_timeout=60,
+            )
+        return True
+    except Exception as e:
+        logger.exception("Не удалось отправить видео (%s)", e)
+        return False
+
+
 async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     file_id, file_name, file_size = _extract_file(update)
     if not file_id:
@@ -183,7 +224,7 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         await context.bot.send_chat_action(update.effective_chat.id, ChatAction.UPLOAD_VIDEO)
         out_path = os.path.join(workdir, f"{variant.key}.mp4")
         try:
-            await asyncio.to_thread(_run_variant, in_path, variant, out_path, language)
+            result = await asyncio.to_thread(_run_variant, in_path, variant, out_path, language)
         except Exception as e:
             logger.exception("Вариант %s упал", variant.key)
             await update.message.reply_text(f"❌ {variant.label}: ошибка — {e}")
@@ -193,19 +234,13 @@ async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             await update.message.reply_text(f"❌ {variant.label}: результат не получен.")
             continue
 
-        try:
-            with open(out_path, "rb") as f:
-                await update.message.reply_video(
-                    video=f,
-                    caption=variant.label,
-                    supports_streaming=True,
-                )
+        remote_url = getattr(result, "remote_url", None)
+        if await _send_video(update, out_path, variant.label, remote_url):
             ok_count += 1
-        except Exception as e:
-            logger.exception("Не удалось отправить вариант %s", variant.key)
+        else:
+            tail = f"\nСсылка на файл: {remote_url}" if remote_url else ""
             await update.message.reply_text(
-                f"⚠️ {variant.label}: видео готово, но не удалось отправить ({e}). "
-                "Возможно, оно больше 50 МБ."
+                f"⚠️ {variant.label}: видео готово, но отправить через Telegram не вышло.{tail}"
             )
 
     if ok_count:
@@ -239,8 +274,10 @@ def build_app() -> Application:
     app = (
         ApplicationBuilder()
         .token(token)
-        .read_timeout(120)
-        .write_timeout(300)  # отправка видео может быть долгой
+        .read_timeout(180)
+        .write_timeout(600)  # отправка/загрузка видео может быть долгой
+        .connect_timeout(60)
+        .pool_timeout(60)
         .build()
     )
 
