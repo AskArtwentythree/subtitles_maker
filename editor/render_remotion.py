@@ -89,7 +89,25 @@ def render(edl_path: str, out_path: str, style: str = "a") -> str:
     if scale:
         cmd += f" --scale={scale}"
 
-    subprocess.run(cmd, cwd=PROJECT, check=True, shell=True)
+    # Стримим вывод (видно прогресс в логах Railway) и одновременно держим хвост,
+    # чтобы при падении положить реальную причину в исключение -> сообщение в Telegram.
+    import collections
+
+    tail: collections.deque[str] = collections.deque(maxlen=40)
+    proc = subprocess.Popen(
+        cmd, cwd=PROJECT, shell=True,
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        text=True, encoding="utf-8", errors="replace", bufsize=1,
+    )
+    assert proc.stdout is not None
+    for line in proc.stdout:
+        sys.stdout.write(line)
+        tail.append(line.rstrip("\n"))
+    proc.wait()
+    if proc.returncode != 0:
+        detail = "\n".join(tail)[-1200:]
+        raise RuntimeError(f"remotion render завершился с кодом {proc.returncode}:\n{detail}")
+
     print(f"[remotion] готово -> {out_abs}")
     return out_abs
 
