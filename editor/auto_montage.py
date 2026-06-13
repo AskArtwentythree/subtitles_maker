@@ -36,11 +36,15 @@ def lang_label(code: str) -> str:
     return LANGUAGES.get(code, ("", code))[1]
 
 
-def build_montage_edl(video_path: str, workdir: str, lang_code: str) -> str:
-    """Собрать EDL: подписи/интро/аутро и субтитры — на выбранном языке."""
+def build_montage_edl(video_path: str, workdir: str, lang_code: str) -> tuple[str, list[str]]:
+    """Собрать EDL: подписи/интро/аутро и субтитры — на выбранном языке.
+
+    Возвращает (путь к EDL, список предупреждений для пользователя). Предупреждения
+    появляются, если ИИ-шаги сорвались и результат получился «сырым».
+    """
     name = lang_name(lang_code)
     edl_path = os.path.join(workdir, f"job_{uuid.uuid4().hex[:8]}.edl.json")
-    make_edl(
+    edl = make_edl(
         video_path,
         edl_path,
         language=None,            # язык исходного аудио — автоопределение whisper
@@ -48,7 +52,19 @@ def build_montage_edl(video_path: str, workdir: str, lang_code: str) -> str:
         translate_to=name,        # субтитры переводим на этот же язык
         workdir=os.path.join(workdir, "_edl"),
     )
-    return edl_path
+
+    warnings: list[str] = []
+    if edl.get("fallback"):
+        warnings.append(
+            "ИИ-редактор временно сорвался — монтаж собран по запасной схеме "
+            "(без умных подписей/акцентов). Лучше прислать видео ещё раз."
+        )
+    if edl.get("translation_failed"):
+        warnings.append(
+            "Не удалось перевести субтитры — они остались на языке оригинала. "
+            "Лучше прислать видео ещё раз."
+        )
+    return edl_path, warnings
 
 
 def render_variant(edl_path: str, out_path: str, style: str) -> str:

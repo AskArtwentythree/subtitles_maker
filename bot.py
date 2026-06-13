@@ -199,7 +199,9 @@ async def on_language(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         # 1) EDL: анализ материала + монтаж + субтитры на выбранном языке.
         await chat.send_chat_action(ChatAction.TYPING)
         await chat.send_message("🧠 Анализирую материал и собираю монтаж…")
-        edl_path = await asyncio.to_thread(build_montage_edl, in_path, workdir, code)
+        edl_path, warnings = await asyncio.to_thread(build_montage_edl, in_path, workdir, code)
+        for w in warnings:
+            await chat.send_message(f"⚠️ {w}")
 
         # 2) Рендер двух стилей.
         ok = 0

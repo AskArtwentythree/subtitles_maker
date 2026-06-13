@@ -195,6 +195,9 @@ def _fallback(beats: list[dict], meta: dict, target_max: float) -> dict:
     return {"intro": {"title": "", "subtitle": ""}, "clips": clips, "outro": {"cta": ""}}
 
 
+ATTEMPTS = 3  # LLM иногда отдаёт невалидный JSON или разово сбоит сеть — повторяем
+
+
 def build_edl(beats: list[dict], meta: dict, target_language: str = "ru",
               target_min: float = 22.0, target_max: float = 38.0) -> dict:
     """Главный вход: биты+мета -> провалидированный EDL (без субтитров)."""
@@ -202,20 +205,29 @@ def build_edl(beats: list[dict], meta: dict, target_language: str = "ru",
     prompt = _build_prompt(beats, meta, target_language, target_min, target_max)
 
     print("[brain] Думаю над монтажом...")
-    try:
-        result = fal_client.subscribe(
-            LLM_MODEL_ID,
-            arguments={"model": LLM, "system_prompt": SYSTEM, "prompt": prompt},
-            with_logs=False,
-        )
-        raw = (result or {}).get("output") or (result or {}).get("text") or ""
-        edl = _validate(_extract_json_obj(raw), beats, meta)
-        if not edl["clips"]:
-            print("[brain] LLM не дал клипов, беру фолбэк")
-            edl = _fallback(beats, meta, target_max)
-    except Exception as e:
-        print(f"[brain] LLM-монтаж не удался ({e}), фолбэк по качеству")
+    edl = None
+    last_err = None
+    for attempt in range(1, ATTEMPTS + 1):
+        try:
+            result = fal_client.subscribe(
+                LLM_MODEL_ID,
+                arguments={"model": LLM, "system_prompt": SYSTEM, "prompt": prompt},
+                with_logs=False,
+            )
+            raw = (result or {}).get("output") or (result or {}).get("text") or ""
+            candidate = _validate(_extract_json_obj(raw), beats, meta)
+            if candidate["clips"]:
+                edl = candidate
+                break
+            print(f"[brain] попытка {attempt}/{ATTEMPTS}: LLM не дал клипов")
+        except Exception as e:
+            last_err = e
+            print(f"[brain] попытка {attempt}/{ATTEMPTS}: LLM-монтаж не удался ({e})")
+
+    if edl is None:
+        print(f"[brain] все попытки исчерпаны (last_err={last_err}), фолбэк по качеству")
         edl = _fallback(beats, meta, target_max)
+        edl["fallback"] = True  # флаг для бота: монтаж получился «сырым», без подписей
 
     edl["meta"] = meta
     edl["target_language"] = target_language

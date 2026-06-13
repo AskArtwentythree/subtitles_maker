@@ -30,14 +30,18 @@ def _extract_json(text: str):
     return None
 
 
-def translate_texts(texts: list[str], target_language: str) -> list[str]:
+ATTEMPTS = 3  # LLM иногда отдаёт невалидный JSON / разово сбоит — повторяем
+
+
+def translate_texts(texts: list[str], target_language: str) -> tuple[list[str], bool]:
     """Перевести список строк на target_language, сохранив порядок и количество.
 
-    При любой ошибке возвращаем исходные строки (лучше оригинал, чем пусто).
+    Возвращает (строки, ok). При неудаче всех попыток ok=False и исходные строки
+    (лучше оригинал, чем пусто) — вызывающий код может предупредить пользователя.
     """
     items = [{"id": i, "text": str(t or "")} for i, t in enumerate(texts)]
     if not items:
-        return []
+        return [], True
     require_fal_key()
 
     payload = json.dumps(items, ensure_ascii=False)
@@ -51,31 +55,39 @@ def translate_texts(texts: list[str], target_language: str) -> list[str]:
         f"ITEMS:\n{payload}"
     )
 
-    try:
-        result = fal_client.subscribe(
-            LLM_MODEL_ID,
-            arguments={"model": LLM, "prompt": prompt},
-            with_logs=False,
-        )
-        raw = (result or {}).get("output") or (result or {}).get("text") or ""
-        data = _extract_json(raw)
-        if not isinstance(data, list):
-            return [it["text"] for it in items]
-        by_id = {}
-        for row in data:
-            try:
-                by_id[int(row["id"])] = str(row.get("text") or "").strip()
-            except (KeyError, TypeError, ValueError):
-                continue
-        out = [by_id.get(i) or items[i]["text"] for i in range(len(items))]
-        return out
-    except Exception as e:  # переводчик не должен валить весь пайплайн
-        print(f"[translate] перевод не удался ({e}), оставляю оригинал")
-        return [it["text"] for it in items]
+    for attempt in range(1, ATTEMPTS + 1):
+        try:
+            result = fal_client.subscribe(
+                LLM_MODEL_ID,
+                arguments={"model": LLM, "prompt": prompt},
+                with_logs=False,
+            )
+            raw = (result or {}).get("output") or (result or {}).get("text") or ""
+            data = _extract_json(raw)
+            if isinstance(data, list):
+                by_id = {}
+                for row in data:
+                    try:
+                        by_id[int(row["id"])] = str(row.get("text") or "").strip()
+                    except (KeyError, TypeError, ValueError):
+                        continue
+                # Принимаем, только если перевели большинство строк — иначе это
+                # битый ответ, и лучше повторить, чем оставить мешанину.
+                if len(by_id) >= max(1, (len(items) + 1) // 2):
+                    return [by_id.get(i) or items[i]["text"] for i in range(len(items))], True
+            print(f"[translate] попытка {attempt}/{ATTEMPTS}: неожиданный ответ модели")
+        except Exception as e:
+            print(f"[translate] попытка {attempt}/{ATTEMPTS} не удалась ({e})")
+
+    print("[translate] все попытки исчерпаны — оставляю оригинал")
+    return [it["text"] for it in items], False
 
 
 def translate_captions(edl: dict, target_language: str) -> dict:
-    """Перевести все субтитры во всех клипах EDL на target_language (тайминги те же)."""
+    """Перевести все субтитры во всех клипах EDL на target_language (тайминги те же).
+
+    Если перевод сорвался, проставляет edl["translation_failed"]=True.
+    """
     refs = []  # (clip_idx, cap_idx)
     texts = []
     for ci, clip in enumerate(edl.get("clips", [])):
@@ -86,7 +98,9 @@ def translate_captions(edl: dict, target_language: str) -> dict:
         return edl
 
     print(f"[translate] перевожу {len(texts)} субтитров -> {target_language}")
-    translated = translate_texts(texts, target_language)
+    translated, ok = translate_texts(texts, target_language)
     for (ci, capi), new_text in zip(refs, translated):
         edl["clips"][ci]["captions"][capi]["text"] = new_text
+    if not ok:
+        edl["translation_failed"] = True
     return edl
