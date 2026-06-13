@@ -52,6 +52,11 @@ logger = logging.getLogger("nutr_bot")
 TELEGRAM_DOWNLOAD_LIMIT = 20 * 1024 * 1024
 ALLOWED_EXTS = {".mp4", ".mov", ".m4v", ".webm", ".mkv", ".avi"}
 
+# Монтаж/рендер тяжёлый по CPU и памяти — на одной машине безопасно делать только
+# одну задачу за раз. Иначе два видео рендерятся параллельно, забивают пул загрузок
+# и память (OOM / зависшая отправка). Сериализуем весь пайплайн этим замком.
+_job_lock = asyncio.Lock()
+
 
 def _lang_keyboard() -> InlineKeyboardMarkup:
     """Инлайн-кнопки выбора языка (по 2 в ряд)."""
@@ -102,28 +107,58 @@ def _suffix(file_name: str) -> str:
     return ext if ext in ALLOWED_EXTS else ".mp4"
 
 
+# Жёсткий потолок на одну попытку отправки: если аплоад завис (бывает на Railway),
+# не ждём вечно, а падаем и пробуем ещё раз / другим способом.
+_SEND_HARD_TIMEOUT = 420  # сек на одну попытку
+
+
+async def _upload_once(chat, out_path: str, caption: str, as_document: bool):
+    """Одна попытка отправки файла (видео или документом) с тайм-аутами PTB."""
+    with open(out_path, "rb") as f:
+        kwargs = dict(
+            caption=caption,
+            read_timeout=120,
+            connect_timeout=60,
+            write_timeout=_SEND_HARD_TIMEOUT,
+            pool_timeout=60,
+        )
+        if as_document:
+            await chat.send_document(document=f, **kwargs)
+        else:
+            await chat.send_video(video=f, supports_streaming=True, **kwargs)
+
+
 async def _send_video(update: Update, out_path: str, caption: str) -> bool:
-    """Залить локальный mp4 с большими таймаутами (рендер — локальный файл)."""
+    """Отправить локальный mp4 надёжно: повтор + фолбэк документом + жёсткий тайм-аут.
+
+    На Railway аплоад большого файла иногда «висит» — оборачиваем каждую попытку в
+    asyncio.wait_for, чтобы бот не застревал молча, а сообщал результат.
+    """
     chat = update.effective_chat
-    try:
-        with open(out_path, "rb") as f:
-            await chat.send_video(
-                video=f,
-                caption=caption,
-                supports_streaming=True,
-                read_timeout=180,
-                connect_timeout=60,
-                write_timeout=600,
-                pool_timeout=60,
-            )
-        return True
-    except Exception as e:
-        logger.exception("Не удалось отправить видео (%s)", e)
+    size_mb = os.path.getsize(out_path) / (1024 * 1024) if os.path.isfile(out_path) else 0
+    # (видео, видео-повтор, документом) — три попытки разными способами.
+    plan = [("видео", False), ("видео", False), ("документом", True)]
+    last_err: Optional[Exception] = None
+    for label_try, as_doc in plan:
         try:
-            await chat.send_message(f"⚠️ {caption}: видео готово, но отправить не вышло ({e}).")
-        except Exception:
-            pass
-        return False
+            await asyncio.wait_for(
+                _upload_once(chat, out_path, caption, as_doc),
+                timeout=_SEND_HARD_TIMEOUT + 30,
+            )
+            return True
+        except Exception as e:  # noqa: BLE001  (в т.ч. asyncio.TimeoutError)
+            last_err = e
+            logger.warning("Отправка %s (%.1f МБ) не удалась (%s) — пробую дальше",
+                           label_try, size_mb, e)
+    logger.exception("Все попытки отправки видео исчерпаны", exc_info=last_err)
+    try:
+        await chat.send_message(
+            f"⚠️ {caption}: видео готово ({size_mb:.0f} МБ), но отправить не вышло "
+            f"({last_err}). Попробуй прислать видео покороче."
+        )
+    except Exception:
+        pass
+    return False
 
 
 def _cleanup(workdir: Optional[str]) -> None:
@@ -193,9 +228,20 @@ async def on_language(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     label = lang_label(code)
     chat = update.effective_chat
 
-    await query.edit_message_text(f"Язык: {label}. Делаю авто-монтаж — это займёт несколько минут.")
+    if _job_lock.locked():
+        await query.edit_message_text(
+            f"Язык: {label}. ⏳ Сейчас обрабатываю другое видео — встал в очередь, "
+            "начну, как освобожусь."
+        )
+    else:
+        await query.edit_message_text(
+            f"Язык: {label}. Делаю авто-монтаж — это займёт несколько минут."
+        )
 
-    try:
+    # Один тяжёлый пайплайн за раз: иначе параллельные рендеры забивают память и
+    # пул загрузок (зависшая отправка, OOM).
+    async with _job_lock:
+      try:
         # 1) EDL: анализ материала + монтаж + субтитры на выбранном языке.
         await chat.send_chat_action(ChatAction.TYPING)
         await chat.send_message("🧠 Анализирую материал и собираю монтаж…")
@@ -236,10 +282,10 @@ async def on_language(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             await chat.send_message(f"Готово ✅ Отправил {ok} из {len(STYLES)} вариантов.")
         else:
             await chat.send_message("Не удалось отрендерить ни одного варианта 😕 Загляни в логи.")
-    except Exception as e:
+      except Exception as e:
         logger.exception("Пайплайн авто-монтажа упал")
         await chat.send_message(f"⚠️ Что-то пошло не так: {e}")
-    finally:
+      finally:
         context.user_data.pop("pending", None)
         _cleanup(workdir)
 
