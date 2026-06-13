@@ -1,0 +1,191 @@
+{
+  "intro": {
+    "title": "Mi Band: Обзор функций",
+    "subtitle": "Умный браслет"
+  },
+  "clips": [
+    {
+      "src_start": 0.031,
+      "src_end": 5.471,
+      "transition_in": "none",
+      "transition_dur": 0.0,
+      "effects": [
+        {
+          "type": "zoom",
+          "to": 1.08,
+          "focus": [
+            0.49,
+            0.44
+          ]
+        },
+        {
+          "type": "label",
+          "text": "Mi Band последнего поколения",
+          "position": "top"
+        }
+      ],
+      "captions": [
+        {
+          "text": "Везде фиксируем Mi Band последнего поколения.",
+          "start": 0.0,
+          "end": 5.44
+        }
+      ]
+    },
+    {
+      "src_start": 12.511,
+      "src_end": 14.691,
+      "transition_in": "fade",
+      "transition_dur": 0.35,
+      "effects": [],
+      "captions": [
+        {
+          "text": "Вот, и у них еще есть приложение с запахом.",
+          "start": 0.0,
+          "end": 2.18
+        }
+      ]
+    },
+    {
+      "src_start": 18.104,
+      "src_end": 23.104,
+      "transition_in": "whip",
+      "transition_dur": 0.35,
+      "effects": [
+        {
+          "type": "label",
+          "text": "Китайский язык",
+          "position": "top"
+        }
+      ],
+      "captions": [
+        {
+          "text": "Все, конечно, на китайском языке.",
+          "start": 0.0,
+          "end": 5.0
+        }
+      ]
+    },
+    {
+      "src_start": 23.104,
+      "src_end": 27.104,
+      "transition_in": "fade",
+      "transition_dur": 0.35,
+      "effects": [
+        {
+          "type": "zoom",
+          "to": 1.08,
+          "focus": [
+            0.56,
+            0.5
+          ]
+        },
+        {
+          "type": "label",
+          "text": "Приложение ZEPP",
+          "position": "top"
+        }
+      ],
+      "captions": [
+        {
+          "text": "Я понимаю. Вот у нас есть коннектор для приложения ZEPP.",
+          "start": 0.0,
+          "end": 4.0
+        }
+      ]
+    },
+    {
+      "src_start": 29.104,
+      "src_end": 34.104,
+      "transition_in": "whip",
+      "transition_dur": 0.35,
+      "effects": [
+        {
+          "type": "label",
+          "text": "Мониторинг сна",
+          "position": "top"
+        }
+      ],
+      "captions": [
+        {
+          "text": "Есть мониторинг сна, мониторинг активности, настроения, движения.",
+          "start": 0.0,
+          "end": 5.0
+        }
+      ]
+    },
+    {
+      "src_start": 34.104,
+      "src_end": 40.084,
+      "transition_in": "fade",
+      "transition_dur": 0.35,
+      "effects": [
+        {
+          "type": "zoom",
+          "to": 1.08,
+          "focus": [
+            0.59,
+            0.58
+          ]
+        },
+        {
+          "type": "label",
+          "text": "NFC (Alipay, WeChat Pay)",
+          "position": "top"
+        }
+      ],
+      "captions": [
+        {
+          "text": "Есть Alipay, WeChat Pay, то есть есть NFC.",
+          "start": 0.0,
+          "end": 5.98
+        }
+      ]
+    },
+    {
+      "src_start": 43.48,
+      "src_end": 50.48,
+      "transition_in": "slide",
+      "transition_dur": 0.35,
+      "effects": [
+        {
+          "type": "label",
+          "text": "WeChat, Meja",
+          "position": "top"
+        }
+      ],
+      "captions": [
+        {
+          "text": "Есть WeChat, WeChat Pay, Meja.",
+          "start": 0.0,
+          "end": 7.0
+        }
+      ]
+    },
+    {
+      "src_start": 52.48,
+      "src_end": 55.48,
+      "transition_in": "fade",
+      "transition_dur": 0.35,
+      "effects": [],
+      "captions": [
+        {
+          "text": "То есть все приложения Xiaomi, которые мы сегодня используем.",
+          "start": 0.0,
+          "end": 3.0
+        }
+      ]
+    }
+  ],
+  "outro": {
+    "cta": "Узнай больше о Mi Band!"
+  },
+  "meta": {
+    "width": 720,
+    "height": 1280,
+    "fps": 30.0,
+    "duration": 61.233
+  },
+  "target_language": "ru",
+  "source": "C:\\Users\\User\\Desktop\\nutr_bot\\samples\\video1.mov"
+}

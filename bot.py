@@ -1,39 +1,45 @@
-"""Telegram-бот: принимает озвученную запись экрана и возвращает видео с субтитрами.
+"""Telegram-бот: принимает озвученное видео и возвращает пакет для Shorts/Reels.
 
-На одно входящее видео бот генерирует 3 варианта оформления субтитров:
-  1) autosub_hustle — fal-ai/auto-subtitle, крупный шрифт по 2 слова в строке;
-  2) shadeplay      — Veed, пресет shadeplay;
-  3) hustle         — Veed, пресет hustle.
+Сценарий:
+  1) пользователь присылает видео с озвучкой;
+  2) выбирает язык кнопками (EN / ES / PT / KK / UZ);
+  3) бот делает АВТОМОНТАЖ в двух стилях (Clean Mint / Bold Pop) на выбранном языке:
+     отбирает кадры, режет лишнее, добавляет переходы, зум-акценты, подписи-плашки,
+     стрелки и СУБТИТРЫ на выбранном языке;
+  4) присылает оба готовых ролика и описание для шортса с хэштегами на этом языке.
 
-Запуск:
-  python bot.py
-
+Запуск:  python bot.py
 Нужны переменные окружения (см. .env.example): TELEGRAM_BOT_TOKEN, FAL_KEY.
+Рендер использует проект Remotion в ./my-video (нужны Node 18+ и установленные зависимости).
 """
 import asyncio
 import logging
 import os
 import tempfile
-from dataclasses import dataclass
 from typing import Optional
 
-from telegram import Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ChatAction
+from telegram.error import Conflict
 from telegram.ext import (
     Application,
     ApplicationBuilder,
+    CallbackQueryHandler,
     CommandHandler,
     ContextTypes,
     MessageHandler,
     filters,
 )
 
-from config import (
-    DEFAULT_SUBTITLE_LANGUAGE,
-    require_fal_key,
-    require_telegram_token,
+from config import require_fal_key, require_telegram_token
+from editor.auto_montage import (
+    LANGUAGES,
+    STYLES,
+    build_montage_edl,
+    lang_label,
+    make_localized_copy,
+    render_variant,
 )
-from providers import SubtitleOptions, get_provider
 
 logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -44,84 +50,40 @@ logger = logging.getLogger("nutr_bot")
 
 # Лимит Telegram Bot API на скачивание файла ботом (getFile) — 20 МБ.
 TELEGRAM_DOWNLOAD_LIMIT = 20 * 1024 * 1024
-
-# Поддерживаемые расширения входного видео.
 ALLOWED_EXTS = {".mp4", ".mov", ".m4v", ".webm", ".mkv", ".avi"}
 
 
-@dataclass
-class Variant:
-    """Один вариант оформления субтитров."""
-
-    key: str            # короткий ключ для имён файлов
-    label: str          # подпись для пользователя
-    provider: str       # имя провайдера: "veed" | "autosub"
-    preset: str = "hustle"
-    extra: Optional[dict] = None
-
-    def build_opts(self, language: Optional[str]) -> SubtitleOptions:
-        return SubtitleOptions(
-            preset=self.preset,
-            language=language,
-            extra=dict(self.extra or {}),
-        )
-
-
-# Три запрошенных варианта.
-VARIANTS = [
-    Variant(
-        key="autosub_hustle",
-        label="1/3 · autosub (крупный, по 2 слова)",
-        provider="autosub",
-        extra={
-            "font_size": 50,
-            "words_per_subtitle": 2,
-            "stroke_width": 4,  # обводка для читаемости поверх любого фона
-        },
-    ),
-    Variant(
-        key="shadeplay",
-        label="2/3 · Veed · shadeplay",
-        provider="veed",
-        preset="shadeplay",
-    ),
-    Variant(
-        key="hustle",
-        label="3/3 · Veed · hustle",
-        provider="veed",
-        preset="hustle",
-    ),
-]
-
-
-def _run_variant(video_path: str, variant: Variant, out_path: str, language: Optional[str]):
-    """Синхронный вызов провайдера (выполняется в отдельном потоке)."""
-    provider = get_provider(variant.provider)
-    opts = variant.build_opts(language)
-    return provider.generate(video_path, opts, out_path)
+def _lang_keyboard() -> InlineKeyboardMarkup:
+    """Инлайн-кнопки выбора языка (по 2 в ряд)."""
+    buttons = [
+        InlineKeyboardButton(label, callback_data=f"lang:{code}")
+        for code, (_name, label) in LANGUAGES.items()
+    ]
+    rows = [buttons[i : i + 2] for i in range(0, len(buttons), 2)]
+    return InlineKeyboardMarkup(rows)
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(
-        "Привет! Я делаю субтитры в стиле Reels/Shorts.\n\n"
-        "Пришли мне запись экрана с озвучкой (видео или файл), и я верну 3 варианта:\n"
-        "1) autosub — крупный текст, по 2 слова в строке;\n"
-        "2) Veed · shadeplay;\n"
-        "3) Veed · hustle.\n\n"
-        f"Язык распознавания по умолчанию: {DEFAULT_SUBTITLE_LANGUAGE or 'авто'}.\n"
+        "Привет! Я делаю авто-монтаж для Shorts/Reels из твоего озвученного видео.\n\n"
+        "Как это работает:\n"
+        "1) пришли видео с голосом;\n"
+        "2) выбери язык кнопками;\n"
+        "3) я соберу монтаж в 2 стилях (отбор кадров, переходы, акценты, субтитры) "
+        "на выбранном языке;\n"
+        "4) пришлю оба ролика + описание с хэштегами.\n\n"
         "⚠️ Из-за ограничений Telegram бот может скачать файл размером до 20 МБ."
     )
 
 
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(
-        "Просто отправь видео (mp4/mov) с голосом — пришлю 3 версии с субтитрами.\n"
-        "Обработка занимает ~1–2 минуты на все варианты."
+        "Пришли видео (mp4/mov) с озвучкой и выбери язык — верну 2 варианта авто-монтажа "
+        "с субтитрами и описание для шортса. Обработка занимает несколько минут."
     )
 
 
 def _extract_file(update: Update):
-    """Достать (file_id, имя, размер) из видео/документа/кружка."""
     msg = update.message
     if msg.video:
         v = msg.video
@@ -140,33 +102,12 @@ def _suffix(file_name: str) -> str:
     return ext if ext in ALLOWED_EXTS else ".mp4"
 
 
-async def _send_video(update: Update, out_path: str, caption: str, remote_url: Optional[str]) -> bool:
-    """Отправить видео максимально надёжно.
-
-    1) Сначала отдаём Telegram прямую ссылку на результат (fal.media) — Telegram сам
-       скачивает файл со своей быстрой сети, ничего не выгружая с нашего сервера.
-       Это спасает от WriteTimeout на слабом исходящем канале (Railway и т.п.).
-    2) Если по ссылке не вышло (напр. файл > 20 МБ — лимит отправки по URL) —
-       заливаем локальный файл multipart с большими таймаутами (до 50 МБ).
-    """
-    if remote_url:
-        try:
-            await update.message.reply_video(
-                video=remote_url,
-                caption=caption,
-                supports_streaming=True,
-                read_timeout=180,
-                connect_timeout=60,
-                write_timeout=60,
-                pool_timeout=60,
-            )
-            return True
-        except Exception as e:
-            logger.warning("Отправка по URL не удалась (%s) — пробую загрузить файл", e)
-
+async def _send_video(update: Update, out_path: str, caption: str) -> bool:
+    """Залить локальный mp4 с большими таймаутами (рендер — локальный файл)."""
+    chat = update.effective_chat
     try:
         with open(out_path, "rb") as f:
-            await update.message.reply_video(
+            await chat.send_video(
                 video=f,
                 caption=caption,
                 supports_streaming=True,
@@ -178,104 +119,149 @@ async def _send_video(update: Update, out_path: str, caption: str, remote_url: O
         return True
     except Exception as e:
         logger.exception("Не удалось отправить видео (%s)", e)
+        try:
+            await chat.send_message(f"⚠️ {caption}: видео готово, но отправить не вышло ({e}).")
+        except Exception:
+            pass
         return False
+
+
+def _cleanup(workdir: Optional[str]) -> None:
+    if not workdir or not os.path.isdir(workdir):
+        return
+    import shutil
+
+    shutil.rmtree(workdir, ignore_errors=True)
 
 
 async def handle_video(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     file_id, file_name, file_size = _extract_file(update)
     if not file_id:
-        await update.message.reply_text("Не вижу видео в сообщении. Пришли запись экрана файлом или как видео.")
+        await update.message.reply_text("Не вижу видео. Пришли запись файлом или как видео.")
         return
 
     if file_size and file_size > TELEGRAM_DOWNLOAD_LIMIT:
         mb = file_size / (1024 * 1024)
         await update.message.reply_text(
-            f"Файл {mb:.1f} МБ — это больше лимита Telegram Bot API (20 МБ), "
-            "я не смогу его скачать.\n"
+            f"Файл {mb:.1f} МБ — больше лимита Telegram Bot API (20 МБ), я не смогу его скачать.\n"
             "Сократи/сожми ролик до 20 МБ и пришли снова."
         )
         return
 
-    status = await update.message.reply_text("Получил видео. Скачиваю…")
+    # Если уже было незавершённое видео — подчистим его временную папку.
+    prev = context.user_data.pop("pending", None)
+    if prev:
+        _cleanup(prev.get("workdir"))
 
+    status = await update.message.reply_text("Получил видео. Скачиваю…")
     workdir = tempfile.mkdtemp(prefix="nutr_bot_")
     in_path = os.path.join(workdir, f"input{_suffix(file_name)}")
 
     try:
         tg_file = await context.bot.get_file(file_id)
         await tg_file.download_to_drive(custom_path=in_path)
-    except Exception as e:  # размер >20МБ или иные ошибки getFile
+    except Exception as e:
         logger.exception("Не удалось скачать файл")
         await status.edit_text(
-            "Не получилось скачать видео (возможно, оно больше 20 МБ — это лимит "
-            f"Telegram Bot API).\nОшибка: {e}"
+            "Не получилось скачать видео (возможно, оно больше 20 МБ — лимит Telegram Bot API).\n"
+            f"Ошибка: {e}"
         )
         _cleanup(workdir)
         return
 
-    language = DEFAULT_SUBTITLE_LANGUAGE or None
-
-    await status.edit_text(
-        f"Готово, файл получен. Делаю {len(VARIANTS)} варианта субтитров — это займёт ~1–2 минуты."
-    )
-
-    ok_count = 0
-    for variant in VARIANTS:
-        await context.bot.send_chat_action(update.effective_chat.id, ChatAction.UPLOAD_VIDEO)
-        out_path = os.path.join(workdir, f"{variant.key}.mp4")
-        try:
-            result = await asyncio.to_thread(_run_variant, in_path, variant, out_path, language)
-        except Exception as e:
-            logger.exception("Вариант %s упал", variant.key)
-            await update.message.reply_text(f"❌ {variant.label}: ошибка — {e}")
-            continue
-
-        if not os.path.isfile(out_path):
-            await update.message.reply_text(f"❌ {variant.label}: результат не получен.")
-            continue
-
-        remote_url = getattr(result, "remote_url", None)
-        if await _send_video(update, out_path, variant.label, remote_url):
-            ok_count += 1
-        else:
-            tail = f"\nСсылка на файл: {remote_url}" if remote_url else ""
-            await update.message.reply_text(
-                f"⚠️ {variant.label}: видео готово, но отправить через Telegram не вышло.{tail}"
-            )
-
-    if ok_count:
-        await status.edit_text(f"Готово ✅ Отправил {ok_count} из {len(VARIANTS)} вариантов.")
-    else:
-        await status.edit_text("Не удалось сделать ни одного варианта 😕 Загляни в логи.")
-
-    _cleanup(workdir)
+    context.user_data["pending"] = {"workdir": workdir, "in_path": in_path}
+    await status.edit_text("Видео получено. На каком языке сделать субтитры и описание?")
+    await update.message.reply_text("Выбери язык:", reply_markup=_lang_keyboard())
 
 
-def _cleanup(workdir: str) -> None:
+async def on_language(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    await query.answer()
+
+    code = (query.data or "").split(":", 1)[-1]
+    if code not in LANGUAGES:
+        await query.edit_message_text("Неизвестный язык. Пришли видео заново.")
+        return
+
+    pending = context.user_data.get("pending")
+    if not pending or not os.path.isfile(pending.get("in_path", "")):
+        await query.edit_message_text("Видео не найдено (возможно, истекло). Пришли его заново.")
+        return
+
+    workdir = pending["workdir"]
+    in_path = pending["in_path"]
+    label = lang_label(code)
+    chat = update.effective_chat
+
+    await query.edit_message_text(f"Язык: {label}. Делаю авто-монтаж — это займёт несколько минут.")
+
     try:
-        for name in os.listdir(workdir):
+        # 1) EDL: анализ материала + монтаж + субтитры на выбранном языке.
+        await chat.send_chat_action(ChatAction.TYPING)
+        await chat.send_message("🧠 Анализирую материал и собираю монтаж…")
+        edl_path = await asyncio.to_thread(build_montage_edl, in_path, workdir, code)
+
+        # 2) Рендер двух стилей.
+        ok = 0
+        for i, (style, style_name) in enumerate(STYLES.items(), start=1):
+            await chat.send_chat_action(ChatAction.UPLOAD_VIDEO)
+            await chat.send_message(f"🎬 Рендерю вариант {i}/{len(STYLES)}: {style_name}…")
+            out_path = os.path.join(workdir, f"variant_{style}.mp4")
             try:
-                os.remove(os.path.join(workdir, name))
-            except OSError:
-                pass
-        os.rmdir(workdir)
-    except OSError:
-        pass
+                await asyncio.to_thread(render_variant, edl_path, out_path, style)
+            except Exception as e:
+                logger.exception("Рендер %s упал", style)
+                await chat.send_message(f"❌ Вариант «{style_name}» не отрендерился: {e}")
+                continue
+            if os.path.isfile(out_path):
+                if await _send_video(update, out_path, f"🎬 {style_name} · {label}"):
+                    ok += 1
+            else:
+                await chat.send_message(f"❌ Вариант «{style_name}»: файл не получен.")
+
+        # 3) Описание + хэштеги на выбранном языке.
+        await chat.send_chat_action(ChatAction.TYPING)
+        await chat.send_message("📝 Пишу описание и хэштеги…")
+        try:
+            caption = await asyncio.to_thread(make_localized_copy, edl_path, code)
+            if caption:
+                await chat.send_message(caption, disable_web_page_preview=True)
+        except Exception as e:
+            logger.exception("Копирайтинг упал")
+            await chat.send_message(f"⚠️ Описание сделать не вышло: {e}")
+
+        if ok:
+            await chat.send_message(f"Готово ✅ Отправил {ok} из {len(STYLES)} вариантов.")
+        else:
+            await chat.send_message("Не удалось отрендерить ни одного варианта 😕 Загляни в логи.")
+    except Exception as e:
+        logger.exception("Пайплайн авто-монтажа упал")
+        await chat.send_message(f"⚠️ Что-то пошло не так: {e}")
+    finally:
+        context.user_data.pop("pending", None)
+        _cleanup(workdir)
 
 
 async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if isinstance(context.error, Conflict):
+        logger.warning(
+            "Conflict getUpdates — параллельный опрос (обычно overlap при редеплое). "
+            "Если повторяется постоянно — проверь, что не запущен второй экземпляр бота."
+        )
+        return
     logger.error("Необработанная ошибка", exc_info=context.error)
 
 
 def build_app() -> Application:
     token = require_telegram_token()
-    require_fal_key()  # упадём сразу, если ключа нет
+    require_fal_key()
 
     app = (
         ApplicationBuilder()
         .token(token)
+        .concurrent_updates(True)
         .read_timeout(180)
-        .write_timeout(600)  # отправка/загрузка видео может быть долгой
+        .write_timeout(600)
         .connect_timeout(60)
         .pool_timeout(60)
         .build()
@@ -283,6 +269,7 @@ def build_app() -> Application:
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_cmd))
+    app.add_handler(CallbackQueryHandler(on_language, pattern=r"^lang:"))
     app.add_handler(
         MessageHandler(
             filters.VIDEO | filters.VIDEO_NOTE | filters.Document.VIDEO,
@@ -296,7 +283,7 @@ def build_app() -> Application:
 def main() -> None:
     app = build_app()
     logger.info("Бот запущен. Жду видео…")
-    app.run_polling(allowed_updates=Update.ALL_TYPES)
+    app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
 
 
 if __name__ == "__main__":

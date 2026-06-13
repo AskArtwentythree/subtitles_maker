@@ -1,0 +1,19 @@
+# Railway/Nixpacks. Боту нужны:
+#  - ffmpeg          — нарезка кадров/декод видео для пайплайна;
+#  - nodejs          — рендер Remotion-проекта в ./my-video;
+#  - chromium        — headless-браузер для Remotion (берём системный из nix,
+#                      он самодостаточен по библиотекам, поэтому не тащим
+#                      remotion-овский headless-shell и не ловим missing libs).
+# Python-зависимости ставятся из requirements.txt автоматически (provider python).
+[phases.setup]
+nixPkgs = ["...", "ffmpeg", "nodejs_20", "chromium"]
+
+# После установки Python-зависимостей доустанавливаем node_modules для Remotion.
+# Отдельная фаза build идёт после install, поэтому дефолтную установку pip не ломаем.
+[phases.build]
+cmds = ["cd my-video && npm ci --include=dev"]
+
+[variables]
+# Ограничиваем параллельность рендера, чтобы не словить OOM на стандартном плане.
+# Сам путь к Chromium не задаём — render_remotion найдёт его в PATH (nix-пакет).
+REMOTION_CONCURRENCY = "2"

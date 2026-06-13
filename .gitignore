@@ -6,3 +6,17 @@ venv/
 output/
 samples/*
 !samples/.gitkeep
+
+# Кэш скиллов Cursor / локи — не для деплоя
+.agents/
+skills-lock.json
+
+# Случайные/мусорные файлы
+photo_*.jpg
+
+# HyperFrames-эксперименты: ботом не используются, тащат тяжёлые медиа
+hf-effects/
+
+# Remotion: рантайм-копии исходников и тестовые рендеры (генерятся на лету)
+my-video/public/
+my-video/*.mp4

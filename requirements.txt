@@ -3,5 +3,10 @@ fal-client>=0.5.6
 python-dotenv>=1.0.1
 requests>=2.31.0
 
+# Обложка: нарезка кадров (ffmpeg — системный, см. nixpacks.toml),
+# отбор по резкости/яркости и сборка картинки.
+Pillow>=10.4.0
+numpy>=1.26.0
+
 # Telegram bot (bot.py)
 python-telegram-bot>=22.0,<23

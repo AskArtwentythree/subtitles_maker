@@ -10,12 +10,22 @@
 providers/        # провайдеры субтитров с общим интерфейсом
   base.py         # SubtitleProvider / SubtitleOptions / SubtitleResult
   veed_fal.py     # VEED через fal.ai (veed/subtitles)
+  fal_autosub.py  # fal-ai/auto-subtitle (karaoke, font_size)
+pipeline/         # пост-обработка: обложка и описание
+  transcribe.py   # речь -> текст (fal-ai/whisper)
+  frames.py       # нарезка кадров ffmpeg + отбор по резкости/яркости
+  cover.py        # выбор кадра (fal vision) + сборка обложки 9:16 (Pillow)
+  copywriter.py   # описание (ES + RU/EN) и хэштеги (fal-ai/any-llm)
+assets/fonts/     # шрифты обложки (Anton, Montserrat)
 cli.py            # тест провайдеров на локальном файле
 config.py         # ключи из .env
-bot.py            # Telegram-бот: видео -> 3 варианта субтитров
+bot.py            # Telegram-бот: видео -> обложка + описание + 3 субтитра
 samples/          # тестовые видео
 output/           # результаты
 ```
+
+ffmpeg обязателен для нарезки кадров под обложку. На Railway он ставится через
+`nixpacks.toml`; локально — установи отдельно (напр. `winget install Gyan.FFmpeg`).
 
 ## Установка
 
@@ -78,13 +88,38 @@ python cli.py samples/features.MOV --provider autosub --language ru \
     --opt highlight_color=yellow --opt words_per_subtitle=3
 ```
 
+## Тест обложки и описания (консоль)
+
+Прогон пайплайна обложки/описания на локальном видео — без Telegram:
+
+```bash
+# полный прогон: транскрипт -> кадр -> тексты -> обложка
+python cover_cli.py samples/features.mov
+
+# только нарезать кадры и показать шорт-лист (бесплатно, без fal)
+python cover_cli.py samples/features.mov --frames-only --keep-frames
+
+# свой хук без копирайтера
+python cover_cli.py samples/features.mov --hook "AÑADE TU COMIDA EN 2 TOQUES"
+```
+
+Результат кладётся в `output/`: `*_cover_es.jpg`, `*_cover_en.jpg`, `*_copy.json`,
+`*_caption.txt`. Нужен установленный ffmpeg.
+
 ## Telegram-бот
 
-Бот принимает озвученную запись экрана и присылает обратно **3 варианта** субтитров:
+Бот принимает озвученную запись экрана и присылает обратно готовый пакет для шортса:
 
-1. `autosub_hustle` — fal-ai/auto-subtitle, `font_size=50`, `words_per_subtitle=2`, обводка;
-2. `shadeplay` — Veed, пресет `shadeplay`;
-3. `hustle` — Veed, пресет `hustle`.
+- 🖼 **две обложки 9:16** (ES и EN) — реальный кадр из видео + текст-хук (без нейрослопа);
+- 📝 **описание** для публикации (испанский для ЛатАм + дубли RU/EN) и хэштеги;
+- 🎬 **3 варианта субтитров**:
+  1. `autosub_hustle` — fal-ai/auto-subtitle, `font_size=50`, `words_per_subtitle=2`, обводка;
+  2. `shadeplay` — Veed, пресет `shadeplay`;
+  3. `hustle` — Veed, пресет `hustle`.
+
+Обложка собирается из настоящего кадра записи (выбор лучшего — vision-модель
+`fal-ai/any-llm/vision`), тексты — `fal-ai/any-llm`, транскрипт — `fal-ai/whisper`.
+Картинки нейросетью НЕ генерируются специально, чтобы не было «сгенерированного» вида.
 
 Запуск:
 
