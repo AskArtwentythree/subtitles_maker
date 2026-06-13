@@ -7,6 +7,10 @@
 # Python-зависимости ставятся из requirements.txt автоматически (provider python).
 [phases.setup]
 nixPkgs = ["...", "ffmpeg", "nodejs_20", "chromium"]
+# Системные шрифты для headless Chromium: без них текст в рендере невидимый.
+# Noto/DejaVu Core покрывают латиницу + кириллицу (казахский) и служат фолбэком
+# к вшитому Montserrat. Ставим через apt — fontconfig находит их автоматически.
+aptPkgs = ["...", "fonts-noto-core", "fonts-dejavu-core", "fontconfig"]
 
 # После установки Python-зависимостей доустанавливаем node_modules для Remotion.
 # Отдельная фаза build идёт после install, поэтому дефолтную установку pip не ломаем.

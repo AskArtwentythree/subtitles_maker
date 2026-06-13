@@ -8,6 +8,8 @@ import {
   interpolate,
   Sequence,
   Easing,
+  delayRender,
+  continueRender,
 } from "remotion";
 import {
   TransitionSeries,
@@ -18,9 +20,29 @@ import { fade } from "@remotion/transitions/fade";
 import { slide } from "@remotion/transitions/slide";
 import { wipe } from "@remotion/transitions/wipe";
 
-// Локальный стек шрифтов — без сетевой загрузки Google Fonts,
-// чтобы рендер не зависел от доступа к fonts.gstatic.com.
-const fontFamily = "Montserrat, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif";
+// Шрифт вшит в проект и грузится из public/fonts — НЕ полагаемся на системные
+// шрифты (в контейнере с headless Chromium их нет, и текст становится невидимым).
+// Montserrat покрывает латиницу (EN/ES/PT/UZ); для кириллицы (KK) и любого
+// непокрытого глифа идёт фолбэк на Noto Sans / DejaVu (ставятся в контейнер
+// через apt, см. nixpacks.toml), затем общий sans-serif.
+const fontFamily =
+  "Montserrat, 'Noto Sans', 'DejaVu Sans', 'Segoe UI', Arial, sans-serif";
+
+if (typeof window !== "undefined" && typeof FontFace !== "undefined") {
+  const fontHandle = delayRender("Загрузка шрифта Montserrat");
+  const montserrat = new FontFace(
+    "Montserrat",
+    `url(${staticFile("fonts/Montserrat-Bold.ttf")}) format("truetype")`,
+    { weight: "100 900" },
+  );
+  montserrat
+    .load()
+    .then((loaded) => {
+      document.fonts.add(loaded);
+      continueRender(fontHandle);
+    })
+    .catch(() => continueRender(fontHandle));
+}
 
 export type StyleId = "a" | "b";
 
