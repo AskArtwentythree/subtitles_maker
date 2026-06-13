@@ -13,7 +13,7 @@ nixPkgs = ["...", "ffmpeg", "nodejs_20", "chromium"]
 [phases.build]
 cmds = ["cd my-video && npm ci --include=dev"]
 
-[variables]
-# Ограничиваем параллельность рендера, чтобы не словить OOM на стандартном плане.
-# Сам путь к Chromium не задаём — render_remotion найдёт его в PATH (nix-пакет).
-REMOTION_CONCURRENCY = "2"
+# Параллельность/масштаб рендера задаём в коде (editor/render_remotion.py):
+# на сервере по умолчанию concurrency=1 и scale=0.6667, чтобы не словить OOM.
+# При необходимости переопредели в переменных сервиса Railway:
+#   REMOTION_CONCURRENCY, REMOTION_SCALE.

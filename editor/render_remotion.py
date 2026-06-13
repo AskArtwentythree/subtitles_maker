@@ -69,13 +69,25 @@ def render(edl_path: str, out_path: str, style: str = "a") -> str:
     cmd = f'npx remotion render {comp} "{out_abs}" "--props={props_path}" --timeout=120000'
 
     browser = _browser_executable()
+    on_server = bool(browser)
     if browser:
         cmd += f' "--browser-executable={browser}"'
-    # На слабых контейнерах высокая параллельность приводит к OOM — даём
-    # ограничить через REMOTION_CONCURRENCY (локально не задаём — берётся дефолт).
-    concurrency = os.environ.get("REMOTION_CONCURRENCY")
+
+    # Память — главный лимит в контейнере. Каждая параллельная вкладка Chromium
+    # рендерит кадр 1080x1920 и ест сотни МБ; при дефолтной параллельности (по
+    # числу ядер) контейнер ловит OOM (exit 137 / "Page crashed").
+    # На сервере (нашли системный chromium) принудительно ставим минимум, а
+    # значения при желании переопределяются переменными окружения.
+    concurrency = os.environ.get("REMOTION_CONCURRENCY") or ("1" if on_server else None)
     if concurrency:
         cmd += f" --concurrency={concurrency}"
+
+    # Даунскейл итогового кадра тоже режет память (рендерим в меньшем разрешении,
+    # раскладка остаётся пропорциональной). 0.6667 от 1080x1920 = 720x1280 —
+    # для шортса нормально (платформы всё равно пережимают).
+    scale = os.environ.get("REMOTION_SCALE") or ("0.6667" if on_server else None)
+    if scale:
+        cmd += f" --scale={scale}"
 
     subprocess.run(cmd, cwd=PROJECT, check=True, shell=True)
     print(f"[remotion] готово -> {out_abs}")
