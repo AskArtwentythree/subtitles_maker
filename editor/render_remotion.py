@@ -72,8 +72,12 @@ def render(edl_path: str, out_path: str, style: str = "a") -> str:
     print(f"[remotion] рендер {video_file} (style={style}, comp={comp}) -> {out_abs}")
     cmd = f'npx remotion render {comp} "{out_abs}" "--props={props_path}" --timeout=120000'
 
+    # «Серверность» определяем по ОС, а НЕ по наличию chromium: иначе, если
+    # chromium не нашёлся на PATH, отключались все лимиты памяти и Remotion брал
+    # параллельность по числу ядер (4x) -> OOM (compositor SIGKILL под конец).
+    on_server = os.name != "nt"
+
     browser = _browser_executable()
-    on_server = bool(browser)
     if browser:
         cmd += f' "--browser-executable={browser}"'
 
@@ -99,6 +103,13 @@ def render(edl_path: str, out_path: str, style: str = "a") -> str:
     crf = os.environ.get("REMOTION_CRF") or ("28" if on_server else None)
     if crf:
         cmd += f" --crf={crf}"
+
+    # Кэш декодированных кадров OffthreadVideo по умолчанию растёт почти без предела
+    # и к концу ролика забивает память -> compositor падает по SIGKILL под самый
+    # конец рендера. Ограничиваем его на сервере (256 МБ достаточно для шортса).
+    cache = os.environ.get("REMOTION_OFFTHREAD_CACHE") or ("268435456" if on_server else None)
+    if cache:
+        cmd += f" --offthreadvideo-cache-size-in-bytes={cache}"
 
     # Стримим вывод (видно прогресс в логах Railway) и одновременно держим хвост,
     # чтобы при падении положить реальную причину в исключение -> сообщение в Telegram.
